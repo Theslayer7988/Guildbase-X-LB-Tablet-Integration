@@ -19,7 +19,7 @@ Guildbase's API doesn't offer these, so they stay on guildbase.gg: building or e
 
 ## Setup
 1. **Guildbase Pro** is required for API keys.
-2. Go to **Guild Settings â†’ API Keys** and create a key with these scopes:
+2. Go to **Guild Settings → API Keys** and create a key with these scopes:
    - `applications:read` and `staff:review` for the applicant and staff sections
    - `guild:read`, `members:read`, `members:write`, `roles:read`, `roles:write`, `exams:read` and `exams:write` for the admin sections
 3. Add these lines to `server.cfg` after `lb-tablet`:
@@ -48,3 +48,6 @@ Guildbase's API doesn't offer these, so they stay on guildbase.gg: building or e
 - The theme follows the tablet's light/dark setting.
 - To preview the UI in a browser, open `ui/index.html`. It loads sample data when it's not running in game.
 
+## Credits
+- **@ryneide** (Hydra Labs): the official Guildbase FiveM resource, which showed how to load the Guildbase apply form in game (fetch and inject, which gets around the `frame-ancestors` block).
+- **@RexaliTy**: the FiveRoster X LB Tablet integration, which was the base for how this app registers with and plugs into LB Tablet.
