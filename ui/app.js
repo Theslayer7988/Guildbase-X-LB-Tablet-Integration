@@ -706,3 +706,357 @@
     async function getRoles(force) {
         if (state.roles && !force) return state.roles;
         const res = await call('adminRoles', {});
+        state.roles = res.ok ? listOf(res, 'roles') : [];
+        return state.roles;
+    }
+    const rolePill = (r) => (r ? pill(r.name, hex(r.color) || '#a3a3a3') : '<span class="dim">No role</span>');
+    const roleOptions = (roles, none = 'No role') => [{ value: '', label: none }, ...roles.map((r) => ({ value: r.id, label: r.name }))];
+
+    const mb = { role_id: '', page: 1 };
+    Views.members = {
+        title: 'Members',
+        guild: true,
+        async render(c, top) {
+            const roles = await getRoles();
+            topBtn(top, `${icon('plus')}Add Member`, async () => {
+                const r = await form({ title: 'Add member', fields: [
+                    { key: 'discord_id', label: 'Discord ID', placeholder: '123456789012345678', required: true, hint: 'Right-click the user in Discord → Copy User ID' },
+                    { key: 'role_id', label: 'Role', type: 'select', options: roleOptions(roles) },
+                ], okText: 'Add Member' });
+                if (!r) return;
+                const res = await call('adminMemberAdd', r);
+                toast(res.ok ? 'Member added.' : res.message, !res.ok);
+                if (res.ok) loadMembers(c);
+            }, 'primary');
+            loadMembers(c);
+        },
+    };
+    async function loadMembers(c) {
+        const roles = state.roles || [];
+        c.innerHTML = `
+            <div class="toolbar"><select class="input" id="mb-role"><option value="">All roles</option>${roles.map((r) => `<option value="${esc(r.id)}" ${String(mb.role_id) === String(r.id) ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
+            <div class="card" id="mb-body">${spinner()}</div>`;
+        $('#mb-role').onchange = (e) => { mb.role_id = e.target.value; mb.page = 1; loadMembers(c); };
+        const res = await call('adminMembers', mb);
+        const body = $('#mb-body');
+        if (!res.ok) return (body.innerHTML = errorBox(res));
+        const members = listOf(res, 'members');
+        if (!members.length) return (body.innerHTML = empty('No members found'));
+        body.innerHTML = `<table class="tbl"><thead><tr><th>Member</th><th>Role</th><th>Joined</th><th></th></tr></thead><tbody>
+            ${members.map((m) => `<tr>
+                <td>${userCell(m.user)}</td>
+                <td>${rolePill(m.role)}</td>
+                <td>${esc(date(m.joined_at))}<div class="t2">${esc(ago(m.joined_at))}</div></td>
+                <td class="r">
+                    <button class="btn sm" data-role="${esc(m.id)}" data-cur="${esc(m.role?.id ?? '')}">Change Role</button>
+                    <button class="btn red sm" data-remove="${esc(m.id)}" data-name="${esc(userName(m.user))}">Remove</button>
+                </td>
+            </tr>`).join('')}</tbody></table>${pager(metaOf(res), (p) => { mb.page = p; loadMembers(c); })}`;
+        $$('[data-role]', body).forEach((b) => (b.onclick = async () => {
+            const r = await form({ title: 'Change role', fields: [{ key: 'role_id', label: 'Role', type: 'select', value: b.dataset.cur, options: roleOptions(roles, 'Remove role') }], okText: 'Save' });
+            if (!r) return;
+            const res = await call('adminMemberRole', { id: b.dataset.role, role_id: r.role_id });
+            toast(res.ok ? 'Role updated.' : res.message, !res.ok);
+            if (res.ok) loadMembers(c);
+        }));
+        $$('[data-remove]', body).forEach((b) => (b.onclick = async () => {
+            if (!(await confirm(`Remove ${b.dataset.name}?`, 'They will be removed from this guild on Guildbase.', 'Remove', 'red'))) return;
+            const res = await call('adminMemberRemove', { id: b.dataset.remove });
+            toast(res.ok ? 'Member removed.' : res.message, !res.ok);
+            if (res.ok) loadMembers(c);
+        }));
+    }
+
+    // ─── ROLES (admin) ────────────────────────────────────────
+    Views.roles = {
+        title: 'Roles',
+        guild: true,
+        async render(c, top) {
+            topBtn(top, `${icon('plus')}New Role`, () => editRole(null), 'primary');
+            const roles = await getRoles(true);
+            if (!roles.length) return (c.innerHTML = `<div class="card">${empty('No roles yet')}</div>`);
+            c.innerHTML = `<div class="card"><table class="tbl"><thead><tr><th>Role</th><th>Members</th><th>Discord Role</th><th></th></tr></thead><tbody>
+                ${roles.slice().sort((a, b) => (a.position ?? 0) - (b.position ?? 0)).map((r) => `<tr>
+                    <td>${rolePill(r)} ${r.is_default ? pill('Default', '#a855f7', 'box') : ''}</td>
+                    <td>${esc(r.members_count ?? '—')}</td>
+                    <td>${r.discord_role_id ? `<span class="code-chip">${esc(r.discord_role_id)}</span>` : '<span class="dim">—</span>'}</td>
+                    <td class="r">${r.is_default ? '<span class="dim small">Locked</span>' : `
+                        <button class="btn sm" data-edit="${esc(r.id)}">Edit</button>
+                        <button class="btn red sm" data-del="${esc(r.id)}" data-name="${esc(r.name)}">Delete</button>`}</td>
+                </tr>`).join('')}</tbody></table></div>`;
+            $$('[data-edit]', c).forEach((b) => (b.onclick = () => editRole(b.dataset.edit)));
+            $$('[data-del]', c).forEach((b) => (b.onclick = async () => {
+                if (!(await confirm(`Delete role "${b.dataset.name}"?`, 'Members with this role will lose it.', 'Delete', 'red'))) return;
+                const res = await call('adminRoleDelete', { id: b.dataset.del });
+                toast(res.ok ? 'Role deleted.' : res.message, !res.ok);
+                if (res.ok) go('roles');
+            }));
+        },
+    };
+    async function editRole(id) {
+        let role = {};
+        if (id) {
+            const res = await call('adminRoleGet', { id });
+            if (!res.ok) return toast(res.message, true);
+            role = res.data || {};
+        }
+        const perms = Array.isArray(role.permissions) ? role.permissions : [];
+        const r = await form({
+            title: id ? `Edit ${role.name}` : 'New role',
+            fields: [
+                { key: 'name', label: 'Name', value: role.name, required: true },
+                { key: 'color', label: 'Colour', type: 'color', value: role.color || '#a855f7', required: true },
+                { key: 'discord_role_id', label: 'Linked Discord role ID (optional)', value: role.discord_role_id },
+                { key: 'permissions', label: 'Permissions', type: 'textarea', rows: 4, value: perms.join(', '), hint: 'Comma-separated Guildbase permission keys. Saving replaces the whole set.' },
+            ],
+            okText: id ? 'Save' : 'Create Role',
+        });
+        if (!r) return;
+        r.permissions = r.permissions.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+        if (!/^#[0-9a-f]{6}$/i.test(r.color)) return toast('Colour must be a hex value like #a855f7', true);
+        const res = await call('adminRoleSave', { id, ...r });
+        toast(res.ok ? (id ? 'Role saved.' : 'Role created.') : res.message, !res.ok);
+        if (res.ok) { state.roles = null; go('roles'); }
+    }
+
+    // ─── EXAMS (admin) ────────────────────────────────────────
+    const ex = { exam: null, status: '', page: 1 };
+    Views.exams = {
+        title: () => ex.exam?.name || 'Exams',
+        guild: true,
+        async render(c, top) {
+            if (ex.exam) return renderAttempts(c, top);
+            refreshBtn(top, () => go('exams'));
+            const res = await call('adminExams', {});
+            if (!res.ok) return (c.innerHTML = errorBox(res));
+            const exams = listOf(res, 'exams');
+            if (!exams.length) return (c.innerHTML = `<div class="card">${empty('No exams yet', 'Create exams on guildbase.gg.')}</div>`);
+            c.innerHTML = `<div class="grid">${exams.map((e) => `
+                <div class="card tpl" style="cursor:pointer" data-exam="${esc(e.id)}">
+                    <div style="display:flex;justify-content:space-between;align-items:center"><div class="stat-icon si-purple" style="width:42px;height:42px">${icon('exams')}</div>${e.is_active ? pill('Active', '#10b981') : pill('Inactive', '#737373')}</div>
+                    <h3>${esc(e.name)}</h3>
+                    <p>${esc(e.description || '')}</p>
+                    <div class="tags">
+                        ${pill(`${e.questions_count ?? 0} questions`, '#a3a3a3', 'box')}
+                        ${e.pass_mark != null ? pill(`Pass ${e.pass_mark}%`, '#a3a3a3', 'box') : ''}
+                        ${e.time_limit_minutes ? pill(`${e.time_limit_minutes} min`, '#a3a3a3', 'box') : ''}
+                        ${e.certificate_enabled ? pill('Certificate', '#a855f7', 'box') : ''}
+                    </div>
+                    <div class="foot"><span class="dim small">${esc(e.attempts_count ?? 0)} attempts</span><span class="btn sm">View Attempts →</span></div>
+                </div>`).join('')}</div>`;
+            $$('[data-exam]', c).forEach((el) => (el.onclick = () => { ex.exam = exams.find((e) => String(e.id) === el.dataset.exam); ex.page = 1; ex.status = ''; go('exams'); }));
+        },
+    };
+    async function renderAttempts(c, top) {
+        if (top) topBtn(top, `${icon('back')}All Exams`, () => { ex.exam = null; go('exams'); });
+        c.innerHTML = `
+            <div class="tabs" id="ex-status">${[['', 'All'], ['submitted', 'Submitted'], ['passed', 'Passed'], ['failed', 'Failed'], ['in_progress', 'In Progress']].map(([v, l]) => `<button data-v="${v}" class="${ex.status === v ? 'active' : ''}">${l}</button>`).join('')}</div>
+            <div class="card" id="ex-body">${spinner()}</div>`;
+        $$('#ex-status button').forEach((b) => (b.onclick = () => { ex.status = b.dataset.v; ex.page = 1; renderAttempts(c, null); }));
+        const res = await call('adminExamAttempts', { id: ex.exam.id, status: ex.status, page: ex.page });
+        const body = $('#ex-body');
+        if (!res.ok) return (body.innerHTML = errorBox(res));
+        const attempts = listOf(res, 'attempts');
+        if (!attempts.length) return (body.innerHTML = empty('No attempts'));
+        body.innerHTML = `<table class="tbl"><thead><tr><th>Candidate</th><th>Attempt</th><th>Score</th><th>Grade</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
+            ${attempts.map((a) => `<tr class="clickable" data-att="${esc(a.id)}">
+                <td>${userCell(a.user)}</td>
+                <td>#${esc(a.attempt_number ?? '')}</td>
+                <td><b style="font-weight:500">${a.percent != null ? esc(Math.round(a.percent)) + '%' : '—'}</b><div class="t2">${a.score != null ? esc(a.score) + ' / ' + esc(a.max_score) : ''}</div></td>
+                <td>${esc(a.grade_label || '—')}</td>
+                <td>${statusPill(a.status)} ${a.requires_manual_grading ? pill('Needs Grading', '#f59e0b') : ''} ${a.violation_count ? pill(`${a.violation_count} violations`, '#ef4444') : ''}</td>
+                <td>${esc(date(a.submitted_at))}<div class="t2">${esc(ago(a.submitted_at))}</div></td>
+            </tr>`).join('')}</tbody></table>${pager(metaOf(res), (p) => { ex.page = p; renderAttempts(c, null); })}`;
+        $$('[data-att]', body).forEach((r) => (r.onclick = () => showAttempt(r.dataset.att)));
+    }
+    async function showAttempt(id) {
+        const res = await call('adminAttempt', { id });
+        if (!res.ok) return toast(res.message, true);
+        const a = res.data || {};
+        await form({
+            title: `${userName(a.user)} · attempt #${a.attempt_number ?? ''}`,
+            text: [
+                `Score: ${a.score ?? '—'} / ${a.max_score ?? '—'} (${a.percent != null ? Math.round(a.percent) + '%' : '—'})`,
+                `Grade: ${a.grade_label || '—'}`,
+                `Status: ${label(a.status)}${a.requires_manual_grading ? ' · needs manual grading' : ''}`,
+                `Risk: ${label(a.risk_level || 'none')} · Violations: ${a.violation_count ?? 0}`,
+                `Time spent: ${a.time_spent_seconds ? Math.round(a.time_spent_seconds / 60) + ' min' : '—'}`,
+                `Started ${date(a.started_at)} · Submitted ${date(a.submitted_at)}${a.released_at ? ' · Released ' + date(a.released_at) : ''}`,
+            ].join('\n'),
+            okText: 'Close', noCancel: true,
+        });
+    }
+
+    // ─── CERTIFICATES (admin) ─────────────────────────────────
+    const ct = { exam_template_id: '', valid: '', page: 1 };
+    Views.certs = {
+        title: 'Certificates',
+        guild: true,
+        async render(c) {
+            const exams = await call('adminExams', {});
+            const list = exams.ok ? listOf(exams, 'exams') : [];
+            c.innerHTML = `
+                <div class="toolbar">
+                    <div class="tabs" id="ct-valid" style="margin:0">${[['', 'All'], ['true', 'Valid'], ['false', 'Revoked']].map(([v, l]) => `<button data-v="${v}" class="${ct.valid === v ? 'active' : ''}">${l}</button>`).join('')}</div>
+                    <select class="input" id="ct-exam"><option value="">All exams</option>${list.map((e) => `<option value="${esc(e.id)}" ${String(ct.exam_template_id) === String(e.id) ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select>
+                </div>
+                <div class="card" id="ct-body">${spinner()}</div>`;
+            $$('#ct-valid button').forEach((b) => (b.onclick = () => { ct.valid = b.dataset.v; ct.page = 1; Views.certs.render(c); }));
+            $('#ct-exam').onchange = (e) => { ct.exam_template_id = e.target.value; ct.page = 1; Views.certs.render(c); };
+            const res = await call('adminCerts', { exam_template_id: ct.exam_template_id, page: ct.page, valid: ct.valid === '' ? undefined : ct.valid === 'true' });
+            const body = $('#ct-body');
+            if (!res.ok) return (body.innerHTML = errorBox(res));
+            const certs = listOf(res, 'certificates');
+            if (!certs.length) return (body.innerHTML = empty('No certificates'));
+            body.innerHTML = `<table class="tbl"><thead><tr><th>Recipient</th><th>Exam</th><th>Score</th><th>Code</th><th>Issued</th><th>Status</th><th></th></tr></thead><tbody>
+                ${certs.map((x) => {
+                    const st = x.is_revoked ? 'revoked' : x.is_valid === false ? 'expired' : 'valid';
+                    return `<tr>
+                        <td><b style="font-weight:500">${esc(x.recipient_name || userName(x.user))}</b></td>
+                        <td>${esc(x.exam_name || '')}</td>
+                        <td>${x.score_percent != null ? esc(Math.round(x.score_percent)) + '%' : '—'}<div class="t2">${esc(x.grade_label || '')}</div></td>
+                        <td><span class="code-chip">${esc(x.code || '')}</span></td>
+                        <td>${esc(date(x.issued_at))}${x.expires_at ? `<div class="t2">Expires ${esc(date(x.expires_at))}</div>` : ''}</td>
+                        <td>${statusPill(st)}${x.revoked_reason ? `<div class="t2">${esc(x.revoked_reason)}</div>` : ''}</td>
+                        <td class="r">${x.is_revoked ? '' : `<button class="btn red sm" data-revoke="${esc(x.id)}" data-name="${esc(x.recipient_name || '')}">Revoke</button>`}</td>
+                    </tr>`;
+                }).join('')}</tbody></table>${pager(metaOf(res), (p) => { ct.page = p; Views.certs.render(c); })}`;
+            $$('[data-revoke]', body).forEach((b) => (b.onclick = async () => {
+                const r = await form({ title: `Revoke certificate${b.dataset.name ? ' for ' + b.dataset.name : ''}?`, fields: [{ key: 'reason', label: 'Reason (optional)', type: 'textarea', rows: 3 }], okText: 'Revoke', okClass: 'red' });
+                if (!r) return;
+                const res = await call('adminCertRevoke', { id: b.dataset.revoke, reason: r.reason });
+                toast(res.ok ? 'Certificate revoked.' : res.message, !res.ok);
+                if (res.ok) Views.certs.render(c);
+            }));
+        },
+    };
+
+    function applyTheme(st) {
+        const t = st?.display?.theme ?? st?.theme;
+        document.body.classList.toggle('light', t === 'light');
+    }
+
+    // ─── browser preview data (not used in game) ──────────────
+    const now = Date.now();
+    const ts = (h) => new Date(now - h * 3600e3).toISOString();
+    const roles = [
+        { id: 1, name: 'Owner', color: '#ef4444', position: 0, members_count: 2, discord_role_id: '1102938475610293847', permissions: ['applications.view', 'applications.review', 'applications.manage'] },
+        { id: 2, name: 'Recruitment Staff', color: '#a855f7', position: 1, members_count: 9, discord_role_id: '1102938475610293848', permissions: ['applications.view', 'applications.review'] },
+        { id: 3, name: 'Member', color: '#737373', position: 9, members_count: 412, is_default: true },
+    ];
+    const ST = { pending: { id: 9, name: 'Pending Review', color: '#f59e0b' }, review: { id: 10, name: 'Under Review', color: '#3b82f6' }, acc: { id: 12, name: 'Accepted', color: '#10b981', is_final: true, final_status: 'accepted' }, rej: { id: 13, name: 'Rejected', color: '#ef4444', is_final: true, final_status: 'rejected' } };
+    const Mock = {
+        init: () => ({ ok: true, data: {
+            community: 'Example Roleplay', playerName: 'RiverStone', unread: 2, isAdmin: true,
+            guild: { name: 'Example Roleplay', member_count: 423, is_pro: true },
+            staff: { guild: { name: 'Example Roleplay' }, staff: { role: { name: 'Owner' } },
+                permissions: { view: true, manage: true, review: true, overturn: true, delete: true, analytics: true, claim: true, ai_check: true },
+                counts: { total: 39, open: 7, flagged: 1 },
+                templates: [{ id: 1, name: "Sheriff's Office Application" }, { id: 2, name: 'SADOT Application' }, { id: 3, name: 'SAFR Application' }] } } }),
+        templates: () => ({ ok: true, data: [
+            { slug: 'bcso', name: "Sheriff's Office Application", description: 'Blaine County & Los Santos County Sheriff. Must be 18+ with a working mic.' },
+            { slug: 'sadot', name: 'SADOT Application', description: 'Tow, road maintenance and traffic control across San Andreas.', closes_at: '2026-12-01' },
+            { slug: 'safr', name: 'SAFR Application', description: 'Fire & EMS. No prior experience needed — training provided at Station 5.' },
+        ] }),
+        startApply: () => ({ ok: true, data: { embed_url: 'about:blank', expires_at: ts(-1) } }),
+        myApps: () => ({ ok: true, data: { applications: [
+            { id: 'a', status: 'in_review', template: { name: 'SADOT Application' }, stage: ST.review, submitted_at: ts(48), can_withdraw: true },
+            { id: 'b', status: 'accepted', is_final: true, template: { name: 'Civilian Whitelist' }, stage: ST.acc, submitted_at: ts(480) },
+        ] } }),
+        withdraw: () => ({ ok: true, data: { message: 'Withdrawn (preview).' } }),
+        inbox: () => ({ ok: true, data: [
+            { kind: 'stage', subject: 'Your SADOT application moved to Under Review', message: 'Hi RiverStone,\n\nA staff member is reviewing your application now.', created_at: ts(1) },
+            { kind: 'submitted', subject: 'Application received', read: true, created_at: ts(48) },
+        ] }),
+        clearInbox: () => ({ ok: true, data: [] }),
+        staffList: () => ({ ok: true, data: [
+            { id: '4f2c91d7', status: 'pending', current_stage: ST.pending, risk_level: 'high', user: { display_name: 'nova_rides', username: 'nova_rides' }, template: { name: 'SADOT Application' }, submitted_at: ts(72) },
+            { id: '2', status: 'accepted', is_final: true, current_stage: ST.acc, user: { display_name: 'ColeHarrison', username: 'coleharrison' }, template: { name: "Sheriff's Office Application" }, submitted_at: ts(24) },
+            { id: '3', status: 'in_review', current_stage: ST.review, is_claimed: true, user: { display_name: 'jxnny.v', username: 'jxnny.v' }, template: { name: 'SADOT Application' }, submitted_at: ts(240) },
+            { id: '4', status: 'withdrawn', is_final: true, user: { display_name: 'dustyroads22', username: 'dustyroads22' }, template: { name: 'SADOT Application' }, submitted_at: ts(160) },
+        ], meta: { current_page: 1, last_page: 2, total: 39, has_more: true } }),
+        staffGet: () => ({ ok: true, data: {
+            application: { id: '4f2c91d7', status: 'pending', risk_level: 'high', flags: ['pasted_content'], time_spent_seconds: 160, revision_count: 0, submitted_at: ts(72), updated_at: ts(72),
+                user: { display_name: 'nova_rides', username: 'nova_rides', discord_id: '284719305512448001' }, template: { name: 'SADOT Application' }, current_stage: ST.pending,
+                answers: [{ title: 'SADOT Application', fields: [
+                    { label: 'Name of Character', type: 'text', value: 'Sam Rivers' },
+                    { label: 'Why do you want to join SADOT?', type: 'textarea', value: 'I work for the DOT irl, and believe this would be a good way to get introduced to the server.' },
+                    { label: 'Are you able to be active at least 1hr a week', type: 'radio', value: 'yes' },
+                    { label: 'If someone is trying to get back in their vehicle while you are towing it, what do you do?', type: 'select', value: 'call_law_enforcement' },
+                ] }] },
+            stages: [ST.pending, ST.review, ST.acc, ST.rej],
+            can_be_pushed_back: true, permissions: { view: true, manage: true, review: true, overturn: true, delete: true, claim: true, ai_check: true },
+            history: [{ description: 'Application submitted', created_at: ts(72) }, { description: 'Flagged: pasted content detected', created_at: ts(72) }],
+        } }),
+        staffAction: (d) => ({ ok: true, data: d.action === 'ai-check' ? { interpretation: 'Likely human-written (12% AI likelihood).' } : { message: 'Done (preview).' } }),
+        adminMembers: () => ({ ok: true, data: [
+            { id: 1, joined_at: ts(2000), role: roles[0], user: { display_name: 'RiverStone', username: 'RiverStone' } },
+            { id: 2, joined_at: ts(900), role: roles[1], user: { display_name: 'AshByrne', username: 'ash.byrne' } },
+            { id: 3, joined_at: ts(40), role: roles[2], user: { display_name: 'nova_rides', username: 'nova_rides' } },
+        ], meta: { current_page: 1, last_page: 9, total: 423, has_more: true } }),
+        adminMemberAdd: () => ({ ok: true, data: {} }),
+        adminMemberRole: () => ({ ok: true, data: {} }),
+        adminMemberRemove: () => ({ ok: true, data: { deleted: true } }),
+        adminRoles: () => ({ ok: true, data: roles }),
+        adminRoleGet: (d) => ({ ok: true, data: roles.find((r) => String(r.id) === String(d.id)) }),
+        adminRoleSave: () => ({ ok: true, data: {} }),
+        adminRoleDelete: () => ({ ok: true, data: { deleted: true } }),
+        adminExams: () => ({ ok: true, data: [
+            { id: 1, name: 'Sheriff Academy Written Exam', description: 'Penal code, use of force and radio procedure.', is_active: true, questions_count: 40, pass_mark: 80, time_limit_minutes: 45, certificate_enabled: true, attempts_count: 58 },
+            { id: 2, name: 'SADOT Tow Certification', description: 'Scene safety, impound rules and traffic control.', is_active: true, questions_count: 25, pass_mark: 85, time_limit_minutes: 30, certificate_enabled: true, attempts_count: 14 },
+        ] }),
+        adminExamAttempts: () => ({ ok: true, data: [
+            { id: 11, attempt_number: 1, status: 'passed', score: 36, max_score: 40, percent: 90, grade_label: 'Distinction', user: { display_name: 'ColeHarrison', username: 'coleharrison' }, submitted_at: ts(5) },
+            { id: 12, attempt_number: 2, status: 'failed', score: 29, max_score: 40, percent: 72.5, grade_label: 'Fail', violation_count: 2, user: { display_name: 'marlowe_k', username: 'marlowe_k' }, submitted_at: ts(26) },
+        ] }),
+        adminAttempt: () => ({ ok: true, data: { attempt_number: 1, status: 'passed', score: 36, max_score: 40, percent: 90, grade_label: 'Distinction', risk_level: 'low', violation_count: 0, time_spent_seconds: 1980, user: { display_name: 'ColeHarrison' }, started_at: ts(6), submitted_at: ts(5) } }),
+        adminCerts: () => ({ ok: true, data: [
+            { id: 1, code: 'GB-7KQ2', recipient_name: 'ColeHarrison', exam_name: 'Sheriff Academy Written Exam', score_percent: 90, grade_label: 'Distinction', is_valid: true, issued_at: ts(5), expires_at: '2027-11-13' },
+            { id: 3, code: 'GB-1AB4', recipient_name: 'Former Deputy', exam_name: 'Sheriff Academy Written Exam', score_percent: 81, is_valid: false, is_revoked: true, revoked_reason: 'Left department', issued_at: ts(3000) },
+        ] }),
+        adminCertRevoke: () => ({ ok: true, data: {} }),
+    };
+
+    // ─── boot ─────────────────────────────────────────────────
+    (async () => {
+        $('#content').innerHTML = spinner();
+        if (!PREVIEW) {
+            if (!(await waitForBridge())) {
+                $('#content').innerHTML = empty('Could not start', 'LB Tablet did not load the app bridge. Reopen the app.');
+                return;
+            }
+            applyTheme(globalThis.settings);
+            globalThis.onSettingsChange?.(applyTheme);
+            globalThis.onNuiEvent('mail', async () => {
+                await refreshInit();
+                if (['inbox', 'mine', 'home'].includes(state.view)) go(state.view);
+            });
+            // full-screen page unavailable: show the form inside the tablet instead
+            // full-screen page didn't load (resource not restarted after updating)
+            globalThis.onNuiEvent('applyFallback', () => {
+                toast('The application window could not open. Ask staff to run "restart gb-tablet".', true);
+            });
+            globalThis.onNuiEvent('browserOpened', (d) => toast(d?.message || 'Opened in your browser.', !d?.ok));
+            globalThis.onNuiEvent('applyClosed', async (d) => {
+                if (d?.submitted) toast('Application submitted!');
+                await refreshInit();
+                state.view = 'mine';
+                renderSidebar();
+                setHead(Views.mine);
+                $('#top-actions').innerHTML = '';
+                Views.mine.render($('#content'), $('#top-actions'), true);
+            });
+            globalThis.onNuiEvent('closed', () => { lockSent = null; });
+            let lastOpen = 0;
+            globalThis.onNuiEvent('opened', async () => {
+                if (Date.now() - lastOpen < 2000) return;
+                lastOpen = Date.now();
+                lockSent = null;
+                syncLock(); // re-assert if the form was still open when the tablet was reopened
+                await refreshInit();
+                if (['home', 'mine', 'inbox'].includes(state.view)) go(state.view);
+            });
+        }
+        if (await refreshInit()) go('home');
+    })();
+})();
