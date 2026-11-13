@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guildbase</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+    <aside class="sidebar">
+        <div class="logo-row">
+            <div class="logo">
+                <img class="logo-full" src="https://guildbase.gg/assets/img/guildbase_logo_text_colour_w.png" alt="Guildbase"
+                     onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'logo-fallback logo-full',innerHTML:'<img src=&quot;icon.svg&quot;>Guildbase'}))">
+                <img class="logo-mini" src="https://guildbase.gg/assets/img/guildbase_icon_favicon_w.png" alt="" onerror="this.onerror=null;this.src='icon.svg'">
+            </div>
+            <button class="collapse-btn" id="collapse-btn" title="Collapse sidebar">
+                <svg class="ico" viewBox="0 0 24 24"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>
+            </button>
+        </div>
+        <div class="user-card" id="user-card"></div>
+        <nav id="nav"></nav>
+    </aside>
+
+    <main>
+        <div class="topbar">
+            <div class="page-head" id="page-head"></div>
+            <div class="top-actions" id="top-actions"></div>
+        </div>
+        <div class="content" id="content"></div>
+    </main>
+
+    <!-- Embedded Guildbase form -->
+    <div class="sheet hidden" id="sheet">
+        <div class="sheet-bar">
+            <button class="btn sm" id="sheet-close">← Done</button>
+            <div class="sheet-title" id="sheet-title"></div>
+            <div class="dim small" id="sheet-exp"></div>
+            <button class="btn sm" id="sheet-reload">Reload</button>
+        </div>
+        <div class="sheet-stage"><div class="sheet-loading" id="sheet-loading"><div class="spinner"></div></div><iframe id="sheet-frame" allow="clipboard-write"></iframe></div>
+    </div>
+
+    <!-- Form modal -->
+    <div class="modal hidden" id="modal">
+        <div class="modal-card">
+            <h3 id="modal-title"></h3>
+            <p class="muted" id="modal-text"></p>
+            <div id="modal-fields" class="mfields"></div>
+            <div class="modal-actions">
+                <button class="btn" id="modal-cancel">Cancel</button>
+                <button class="btn primary" id="modal-ok">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast hidden" id="toast"></div>
+</div>
+<script src="embed.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
